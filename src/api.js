@@ -1,18 +1,20 @@
-//const API_KEY ="9669137d00680684a63615371fe501afec2496b0f5a7126c563c85060700adc1";
 import { v4 as uuidv4 } from "uuid";
-//import Worker from "worker-loader!./sharedworker.js";
 
 const tickersHandlers = new Map();
 
-// const soket = new WebSocket(
-//   `wss://streamer.cryptocompare.com/v2?api_key=${API_KEY}`
-// );
-//const AGGREGATE_INDEX = "5";
+const AGGREGATE_INDEX = "5";
+const EROR_INDEX = "500";
+const MARKET = "CCCAGG";
+const USD_SYMBOL = "USD";
+const BTC_SYMBOL = "BTC";
+let BTC_PRICE = 0;
+const tickersPricesInBTC = new Map(); // prices of tickers to BTC
+///////////////
 
 // Create a SharedWorker Instance using the worker.js file.
 // You need this to be present in all JS files that want access to the socket
 //const worker = new SharedWorker(new URL("./worker.js", import.meta.url));
-const worker = Worker();
+const worker = new SharedWorker("/sharedworker.js");
 
 // Create a unique identifier using the uuid lib. This will help us
 // in identifying the tab from which a message was sent. And if a
@@ -57,9 +59,50 @@ broadcastChannel.addEventListener("message", event => {
 });
 
 // Listen to broadcasts from server
-function handleBroadcast(data) {
-  console.log("This message is meant for everyone!");
-  console.log(data);
+function handleBroadcast(msg) {
+  const parsedTickerData = msg.data;
+  const type = parsedTickerData.TYPE;
+  const newPrice = parsedTickerData.PRICE;
+  if (type === EROR_INDEX) {
+    const msgFromWS = parsedTickerData.PARAMETER;
+    const from = msgFromWS.split("~")[2];
+    const to = msgFromWS.split("~")[3];
+
+    if (to === USD_SYMBOL) {
+      subscribeToTickerOnWs(from, BTC_SYMBOL);
+      //unsubscribeFromTickerOnWs(from, to);
+    } else {
+      // toCurrency === BTC - no price of ticker in BTC (Invalid Sub)
+      const newPrice = "none";
+      const handlers = tickersHandlers.get(from) || [];
+      handlers.forEach(fn => fn(newPrice));
+      //unsubscribeFromTicker(to, BTC_SYMBOL);
+    }
+  }
+
+  if (type === AGGREGATE_INDEX && newPrice) {
+    //const { FROMSYMBOL: currency, TOSYMBOL: toCurrency } = JSON.parse(e.data);
+    const currency = parsedTickerData.FROMSYMBOL;
+    const toCurrency = parsedTickerData.TOSYMBOL;
+    if (toCurrency === BTC_SYMBOL) {
+      tickersPricesInBTC.set(currency, newPrice);
+      recalculatePrices(currency);
+    } else if (currency !== BTC_SYMBOL) {
+      // tickers price in USD
+      const handlers = tickersHandlers.get(currency) || [];
+      handlers.forEach(fn => fn(newPrice));
+    } else {
+      // price of btc changed
+      BTC_PRICE = newPrice;
+
+      const btcHandlers = tickersHandlers.get(currency) || [];
+      btcHandlers.forEach(fn => fn(BTC_PRICE));
+      recalculatePrices(currency);
+      if (!tickersHandlers.size) {
+        unsubscribeFromTickerOnWs(BTC_SYMBOL, USD_SYMBOL);
+      }
+    }
+  }
 }
 
 // Handle event only meant for this tab
@@ -90,63 +133,121 @@ function postMessageToWSServer(input) {
 // Sent a message to server after approx 2.5 sec. This will
 // give enough time to web socket connection to be created.
 //setTimeout(() => postMessageToWSServer("Initial message"), 2500);
+///////////////////////
+// const socket = new WebSocket(
+//   `wss://streamer.cryptocompare.com/v2?api_key=${API_KEY}`
+// );
+// socket.addEventListener("message", e => {
+//   const parsedTickerData = JSON.parse(e.data);
+//   const type = parsedTickerData.TYPE;
+//   const newPrice = parsedTickerData.PRICE;
+//   if (type === EROR_INDEX) {
+//     const msgFromWS = JSON.parse(e.data).PARAMETER;
+//     const from = msgFromWS.split("~")[2];
+//     const to = msgFromWS.split("~")[3];
 
-/////////////////////////////////////////////////////////////////////////////////////
+//     if (to === USD_SYMBOL) {
+//       subscribeToTickerOnWs(from, BTC_SYMBOL);
+//       //unsubscribeFromTickerOnWs(from, to);
+//     } else {
+//       // toCurrency === BTC - no price of ticker in BTC (Invalid Sub)
+//       const newPrice = "none";
+//       const handlers = tickersHandlers.get(from) || [];
+//       handlers.forEach(fn => fn(newPrice));
+//       //unsubscribeFromTicker(to, BTC_SYMBOL);
+//     }
+//   }
+
+//   if (type === AGGREGATE_INDEX && newPrice) {
+//     console.log(JSON.parse(e.data));
+//     //const { FROMSYMBOL: currency, TOSYMBOL: toCurrency } = JSON.parse(e.data);
+//     const currency = parsedTickerData.FROMSYMBOL;
+//     const toCurrency = parsedTickerData.TOSYMBOL;
+//     if (toCurrency === BTC_SYMBOL) {
+//       tickersPricesInBTC.set(currency, newPrice);
+//       recalculatePrices(currency);
+//     } else if (currency !== BTC_SYMBOL) {
+//       // tickers price in USD
+//       const handlers = tickersHandlers.get(currency) || [];
+//       handlers.forEach(fn => fn(newPrice));
+//     } else {
+//       // price of btc changed
+//       BTC_PRICE = newPrice;
+
+//       const btcHandlers = tickersHandlers.get(currency) || [];
+//       btcHandlers.forEach(fn => fn(BTC_PRICE));
+//       recalculatePrices(currency);
+//       if (!tickersHandlers.size) {
+//         unsubscribeFromTickerOnWs(BTC_SYMBOL, USD_SYMBOL);
+//       }
+//     }
+//   }
+// });
+
+function recalculatePrices(currency) {
+  if (BTC_PRICE === 0) {
+    subscribeToTickerOnWs(BTC_SYMBOL, USD_SYMBOL);
+    return;
+  }
+
+  if (!tickersPricesInBTC || tickersPricesInBTC.size === 0) {
+    return;
+  }
+  // for all tickers we have in tickersPricesInBTC call handlers with recalculeted price in USD
+  if (currency === BTC_SYMBOL) {
+    // if price of BTC changed
+    [...tickersPricesInBTC.keys()].forEach(coin => {
+      const newPrice = tickersPricesInBTC.get(coin) * BTC_PRICE;
+      const handlers = tickersHandlers.get(coin) || [];
+      handlers.forEach(fn => fn(newPrice));
+    });
+  } else {
+    //if price of currency in btc changed then we update the price
+    const newPrice = tickersPricesInBTC.get(currency) * BTC_PRICE;
+    const handlers = tickersHandlers.get(currency) || [];
+    handlers.forEach(fn => fn(newPrice));
+  }
+}
 
 // function sendToWebSocket(message) {
 //   const stringifiedMessage = JSON.stringify(message);
 
-//   if (soket.readyState === WebSocket.OPEN) {
-//     soket.send(stringifiedMessage);
+//   if (socket.readyState === WebSocket.OPEN) {
+//     socket.send(stringifiedMessage);
 //     return;
 //   }
 
-//   soket.addEventListener(
+//   socket.addEventListener(
 //     "open",
 //     () => {
-//       soket.send(stringifiedMessage);
+//       socket.send(stringifiedMessage);
 //     },
 //     { once: true }
 //   );
 // }
 
-// soket.addEventListener("message", (e) => {
-//   const {
-//     TYPE: type,
-//     FROMSYMBOL: currency,
-//     PRICE: newPrice,
-//   } = JSON.parse(e.data);
-//   if (type !== AGGREGATE_INDEX || newPrice === undefined) {
-//     return;
-//   }
-
-//   const handlers = tickersHandlers.get(currency) ?? [];
-//   handlers.forEach((fn) => fn(newPrice));
-// });
-
-function subscribeToTickerOnWs(ticker) {
+function subscribeToTickerOnWs(from, to = BTC_SYMBOL) {
   postMessageToWSServer({
     action: "SubAdd",
-    subs: [`5~CCCAGG~${ticker}~USD`]
+    subs: [`${AGGREGATE_INDEX}~${MARKET}~${from}~${to}`]
   });
 }
-function unsubscribeToTickerOnWs(ticker) {
+
+function unsubscribeFromTickerOnWs(from, currency = BTC_SYMBOL) {
+  //const toCurrency = from === BTC_SYMBOL ? USD_SYMBOL : currency;
   postMessageToWSServer({
     action: "SubRemove",
-    subs: [`5~CCCAGG~${ticker}~USD`]
+    subs: [`${AGGREGATE_INDEX}~${MARKET}~${from}~${currency}`]
   });
 }
-export const subscribeToTicker = (tickerName, cb) => {
-  const subscribers = tickersHandlers.get(tickerName) || [];
-  tickersHandlers.set(tickerName, [...subscribers, cb]);
-  subscribeToTickerOnWs(tickerName);
+
+export const subscribeToTicker = (ticker, cb) => {
+  const subscribers = tickersHandlers.get(ticker) || [];
+  tickersHandlers.set(ticker, [...subscribers, cb]);
+  subscribeToTickerOnWs(ticker, USD_SYMBOL);
 };
 
-export const unsubscribeFromTicker = (tickerName, cb) => {
-  const subscribers = tickersHandlers.get(tickerName) || [];
-  tickersHandlers.set(
-    tickerName,
-    subscribers.filter(fn => fn != cb)
-  );
-  unsubscribeToTickerOnWs(tickerName);
+export const unsubscribeFromTicker = ticker => {
+  tickersHandlers.delete(ticker);
+  unsubscribeFromTickerOnWs(ticker);
 };

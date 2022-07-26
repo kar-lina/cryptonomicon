@@ -1,7 +1,7 @@
 // Open a connection. This is a common
 // connection. This will be opened only once.
 const API_KEY =
-  "9669137d00680684a63615371fe501afec2496b0f5a7126c563c85060700adc1";
+  "571162ec1beb027a27c0185f6ea928136051f6eed25ebc6c7d15c0d6cb3afe56";
 const ws = new WebSocket(
   `wss://streamer.cryptocompare.com/v2?api_key=${API_KEY}`
 );
@@ -24,7 +24,6 @@ ws.onclose = () =>
 
 // When we receive data from the server.
 ws.onmessage = ({ data }) => {
-  console.log(data);
   // Construct object to be passed to handlers
   const parsedData = { data: JSON.parse(data), type: "message" };
   if (!parsedData.data.from) {
@@ -32,29 +31,53 @@ ws.onmessage = ({ data }) => {
     // no particular id was set on the from field here.
     // We're using this field to identify which tab sent
     // the message
+
     broadcastChannel.postMessage(parsedData);
   } else {
     // Get the port to post to using the uuid, ie send to
     // expected tab only.
+
     idToPortMap[parsedData.data.from].postMessage(parsedData);
   }
 };
+function sendToWebSocket(message) {
+  const stringifiedMessage = JSON.stringify(message);
 
+  if (ws.readyState === WebSocket.OPEN) {
+    ws.send(stringifiedMessage);
+    return;
+  }
+
+  ws.addEventListener(
+    "open",
+    () => {
+      ws.send(stringifiedMessage);
+    },
+    { once: true }
+  );
+}
 // Event handler called when a tab tries to connect to this worker.
-addEventListener("connect", (e) => {
+self.addEventListener("connect", e => {
   // Get the MessagePort from the event. This will be the
   // communication channel between SharedWorker and the Tab
   const port = e.ports[0];
   port.start();
-  port.onmessage = (msg) => {
+  // We need this to notify the newly connected context to know
+  // the current state of WS connection.
+  port.postMessage({ state: ws.readyState, type: "WSState" });
+  port.onmessage = msg => {
     // Collect port information in the map
     idToPortMap[msg.data.from] = port;
 
     // Forward this message to the ws connection.
-    ws.send(JSON.stringify(msg.data));
-    console.log(msg.data);
+    //ws.send(JSON.stringify(msg.data.data));
+    // ws.addEventListener(
+    //   "open",
+    //   () => {
+    //     ws.send(JSON.stringify(msg.data.data));
+    //   },
+    //   { once: true }
+    // );
+    sendToWebSocket(msg.data.data);
   };
-  // We need this to notify the newly connected context to know
-  // the current state of WS connection.
-  port.postMessage({ state: ws.readyState, type: "WSState" });
 });

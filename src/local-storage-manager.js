@@ -1,9 +1,9 @@
 export const loadLstOfCoins = () => {
   fetch("https://min-api.cryptocompare.com/data/all/coinlist?summary=true")
-    .then((response) => {
+    .then(response => {
       return response.json();
     })
-    .then((data) => {
+    .then(data => {
       const coins = {};
       for (let coin in data.Data) {
         coins[coin] = data.Data[coin].FullName;
@@ -13,6 +13,6 @@ export const loadLstOfCoins = () => {
     });
 };
 
-export const getTickers = (key) => {
+export const getTickers = key => {
   return JSON.parse(localStorage.getItem(key));
 };
