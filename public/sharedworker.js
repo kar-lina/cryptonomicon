@@ -69,15 +69,6 @@ self.addEventListener("connect", e => {
     // Collect port information in the map
     idToPortMap[msg.data.from] = port;
 
-    // Forward this message to the ws connection.
-    //ws.send(JSON.stringify(msg.data.data));
-    // ws.addEventListener(
-    //   "open",
-    //   () => {
-    //     ws.send(JSON.stringify(msg.data.data));
-    //   },
-    //   { once: true }
-    // );
     sendToWebSocket(msg.data.data);
   };
 });
